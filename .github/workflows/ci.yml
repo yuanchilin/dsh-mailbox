@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build client bundle
+        run: npm run build
+
+      - name: Bundle freshness check
+        run: git diff --exit-code -- packages/mailbox/lib/client.js || (echo "lib/client.js 与源码不同步, 请本地运行 npm run build 后提交" && exit 1)
