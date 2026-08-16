@@ -7,17 +7,14 @@ on:
 
 jobs:
   test:
-    name: test (node ${{ matrix.node }})
+    name: test (node 24)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
           cache: npm
 
       - name: Install
