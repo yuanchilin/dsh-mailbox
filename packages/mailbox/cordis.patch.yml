@@ -1,0 +1,12 @@
+# The dsh-mailbox bundle patch: registers the mailbox plugin row over the
+# profile root. Override identity/root in the profile's own cordis.patch.yml:
+#
+#   - id: mailbox
+#     config:
+#       identity: agent-a
+#       root: D:/Downloads/Agent/.mailbox
+#
+# layout=dirs (legacy dual-directory): provide dirs: { "<id>": "<path>" }.
+- insert:
+    - id: mailbox
+      name: '@yuanchilin/dsh-mailbox'

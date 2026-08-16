@@ -1,0 +1,14 @@
+{
+  "identity": "mcp",
+  "layout": "dirs",
+  "root": "",
+  "dirs": {
+    "mcp": "D:/Downloads/Agent/Soc/tools/mcp-serial/mailbox",
+    "rp": "D:/Downloads/Agent/RP/tools/mailbox"
+  },
+  "participants": [],
+  "intervalSec": 2,
+  "timeoutSec": 0,
+  "seenFile": "D:/Downloads/Agent/Soc/tools/mcp-serial/tools/.seen_mcp.json",
+  "patchRoot": "D:/Downloads/Agent/Soc/tools/mcp-serial"
+}

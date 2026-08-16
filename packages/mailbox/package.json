@@ -1,0 +1,81 @@
+{
+  "name": "@yuanchilin/dsh-mailbox",
+  "version": "0.0.1",
+  "description": "DeepSeek Harness cross-session file mailbox: send/recv/status tools over a shared filesystem mailbox (N participants, directed & broadcast routing, seen dedup, TTL cleanup, session directory & presence), a /mailbox slash command with popup completion, a plugin-native wake watcher, a zero-dependency node CLI and a packaged DSH skill.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./src/*": "./src/*",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "mailbox": "bin/mailbox.mjs"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/core.js",
+    "lib/command.js",
+    "lib/watcher.js",
+    "lib/directory-parse.js",
+    "lib/client.js",
+    "lib/types/index.d.ts",
+    "bin/",
+    "cordis.patch.yml",
+    "skill/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch:client": "tsdown --watch",
+    "test": "node --test --test-isolation=none test/"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "mailbox",
+    "cross-session",
+    "messaging",
+    "plugin",
+    "client"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
