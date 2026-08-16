@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# 本地 mailbox 测试产物 (CLI 冒烟/真实测试生成, 非项目文件)
+.mailbox-test/
+.tmp-mailbox-demo/
+.tmp-mailbox-*/
+.mailbox-wait.config.json
+.seen-wait.json
+
+# npm 缓存 (构建工具链)
+.npm-cache/
+
+# logs
+*.log
+npm-debug.log*
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 构建/缓存 (预留)
+dist/
+coverage/
+*.tsbuildinfo
+
+# 生成物 (不跟踪): 历史 typert 生成 / tsc 发射 / trigger 赘余
+# 注: lib/client.js(+.map) 浏览器 bundle 提交入库 (git clone 后 link: 即用; CI 校验其与源码同步)
+packages/mailbox/lib/typert.*
+packages/mailbox/lib/_typert.*
+packages/mailbox/lib/types/*
+!packages/mailbox/lib/types/index.d.ts
+packages/mailbox/node_modules/

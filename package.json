@@ -1,0 +1,15 @@
+{
+  "name": "dsh-mailbox-monorepo",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Workspace root for @yuanchilin/dsh-mailbox — cross-session file mailbox plugin for DeepSeek Harness.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @yuanchilin/dsh-mailbox",
+    "test": "npm run test --workspace @yuanchilin/dsh-mailbox"
+  }
+}
