@@ -26,6 +26,9 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# 本地工具链 (便携 gh CLI 等, 不进仓库)
+.tools/
+
 # 生成物 (不跟踪): 历史 typert 生成 / tsc 发射 / trigger 赘余
 # 注: lib/client.js(+.map) 浏览器 bundle 提交入库 (git clone 后 link: 即用; CI 校验其与源码同步)
 packages/mailbox/lib/typert.*
