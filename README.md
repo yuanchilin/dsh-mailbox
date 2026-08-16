@@ -27,7 +27,18 @@ npm run build      # 重建客户端 bundle (lib/client.js, 提交入库)
 
 ## CI
 
-`.github/workflows/ci.yml`：push/PR 触发，Node 22/24，`npm ci` → 测试 → 构建 → 校验 bundle 与源码同步。
+`.github/workflows/ci.yml`：push/PR 触发，Node 24，`npm ci` → 测试 → 构建 → 校验 bundle 与源码同步。
+
+## 发布 (CD)
+
+`.github/workflows/publish.yml`：推送 `v*` tag 时自动 测试 → 构建 → 校验 → `npm publish`。
+
+```sh
+npm version patch --workspace @yuanchilin/dsh-mailbox   # 0.0.2: 自动提交 + 打 tag v0.0.2
+git push origin main --tags
+```
+
+前提：仓库 Settings → Secrets and variables → Actions 添加 `NPM_TOKEN`（npm granular access token，勾选 bypass 2FA，权限 Publish）。
 
 ## License
 
