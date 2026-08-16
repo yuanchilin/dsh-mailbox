@@ -37,7 +37,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "watch:client": "tsdown --watch",
-    "test": "node --test --test-isolation=none test/"
+    "test": "node --test --test-isolation=none \"test/*.test.js\""
   },
   "keywords": [
     "deepseek-harness",
