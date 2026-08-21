@@ -2,7 +2,7 @@
 //  @yuanchilin/dsh-mailbox — 宿主 `/mailbox` 命令
 //
 //  在聊天输入框直接使用 (服务端命令注册表, 每个会话独立执行):
-//    /mailbox                      → 用法 + 会话目录 (发现对方)
+//    /mailbox                      → 会话目录 (发现对方)
 //    /mailbox <target|alias|all> <message>   → 定向/别名/广播发送
 //    /mailbox recv                 → 收取发给我的新消息
 //    /mailbox list                 → 会话目录
@@ -13,14 +13,12 @@
 
 import * as core from "./core.js";
 
-export const MAILBOX_USAGE = "Usage: /mailbox <target|alias|all> <message>   |   /mailbox [list|recv]";
-
 /** 解析命令输入 (首 token 为目标, 其余为消息)。 */
 export function parseMailboxCommand(rawInput) {
   const input = String(rawInput ?? "").trim();
   if (input.length === 0) return { kind: "usage" };
   const lower = input.toLowerCase();
-  if (lower === "list" || lower === "sessions" || lower === "help" || lower === "?") return { kind: "list" };
+  if (lower === "list" || lower === "help" || lower === "?") return { kind: "list" };
   if (lower === "recv") return { kind: "recv" };
   const sp = input.search(/\s/);
   if (sp === -1) return { kind: "no-message", to: input };
@@ -53,7 +51,9 @@ export function executeMailboxCommand(ctx, cfg, invocation) {
   const parsed = parseMailboxCommand(invocation.rawInput);
   switch (parsed.kind) {
     case "usage":
-      return { kind: "success", text: `${MAILBOX_USAGE}\n\n会话目录:\n${renderDirectory(eff)}` };
+      // 不再打印 "Usage: ..." 帮助行：用法提示已在弹窗补全与命令 hint 中提供，
+      // 裸 /mailbox 只承担"发现会话目录"职责，避免每次都先冒出一条 Usage 噪音。
+      return { kind: "success", text: `会话目录:\n${renderDirectory(eff)}` };
     case "list":
       return { kind: "success", text: `会话目录:\n${renderDirectory(eff)}` };
     case "recv": {
@@ -66,7 +66,7 @@ export function executeMailboxCommand(ctx, cfg, invocation) {
       return { kind: "success", text: `新消息 ${msgs.length} 条:\n${lines.join("\n")}` };
     }
     case "no-message":
-      return { kind: "error", text: `/mailbox ${parsed.to}: 缺少消息内容。${MAILBOX_USAGE}` };
+      return { kind: "error", text: `/mailbox ${parsed.to}: 缺少消息内容（用法：/mailbox <目标|别名|all> <消息>）` };
     case "send": {
       const target = core.resolveTarget(eff, parsed.to);
       const id = core.sendMessage(eff, {

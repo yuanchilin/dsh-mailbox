@@ -69,19 +69,30 @@ window.__ModuleLoader__.load({
 					ui: {
 						kind: "popupSelect",
 						options: async (session) => {
-							if (remote.commands === void 0) return [];
-							const result = await remote.commands.execute(session.sessionId, "/mailbox");
+							const commandActions = [{
+								id: "recv",
+								label: "📥 recv — 收取发给我的新消息",
+								detail: "读取当前会话收件箱（自动去重）",
+								isCommand: true
+							}, {
+								id: "list",
+								label: "📇 list — 列出会话目录",
+								detail: "查看所有会话身份/别名/在线状态",
+								isCommand: true
+							}];
+							if (remote.commands === void 0) return commandActions;
+							const result = await remote.commands.execute(session.sessionId, "/mailbox", []);
 							if (!result.ok || result.value === void 0) throw new Error(`mailbox 目录获取失败: ${result.error?.message ?? result.error?.code ?? "unknown"}`);
 							const rows = parseDirectory(result.value.result?.text ?? "");
-							if (rows.length === 0) throw new Error("mailbox 目录为空 (暂无注册会话)");
-							return rows;
+							return [...commandActions, ...rows];
 						},
 						onSelect: async (option, session) => {
 							const actx = sessions.scope(session.sessionId);
 							if (actx === void 0) return;
 							const input = scope.get("conversation")?.input?.for(actx);
 							if (input === void 0) return;
-							input.setDraft(`/mailbox ${option.id} `);
+							const draft = option.isCommand ? `/mailbox ${option.id}` : `/mailbox ${option.id} `;
+							input.setDraft(draft);
 							setTimeout(() => {
 								const list = document.querySelectorAll("textarea[data-phase]");
 								let target = null;

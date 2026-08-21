@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, readdirSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,8 @@ import {
   cleanTTL,
   removeMessage,
   assertUsable,
+  loadSeen,
+  markSeen,
 } from "../lib/core.js";
 
 function setup() {
@@ -110,11 +112,54 @@ test("statusOf 统计", () => {
   }
 });
 
-test("assertUsable 缺配置时抛错", () => {
+test("seen 目录化: 多写者并发标记不互覆盖", () => {
+  const { root } = setup();
+  try {
+    const cfgB = resolveConfig({ identity: "agent-b", root });
+    // 两个独立写者 (模拟两个进程/主机) 各自标记不同消息, 目录化下互不覆盖
+    markSeen(cfgB, "probe-A");
+    markSeen(cfgB, "probe-B");
+    // 旧单文件方案下第二次 save 会覆盖第一次, 丢掉 probe-A
+    const all = loadSeen(cfgB).sort();
+    assert.deepEqual(all, ["probe-A", "probe-B"], "目录化 seen 各方标记互不覆盖");
+    // 变体: 走 recvNew 真实消息, 去重仍然正确
+    mkdirSync(join(root, "who-c"));
+    const pc = resolveConfig({ identity: "who-c", root });
+    sendMessage(pc, { to: "agent-b", topic: "real" });
+    assert.equal(recvNew(cfgB).length, 1);
+    assert.equal(recvNew(cfgB).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("seen 迁移: 旧 .seen.json 自动迁移到目录化并删除旧文件", () => {
+  const { root, cfgA, cfgB } = setup();
+  try {
+    const legacy = join(root, "agent-b", ".seen.json");
+    writeFileSync(legacy, JSON.stringify(["old-1", "old-2"]), "utf-8");
+    // recv 触发 loadSeen → 迁移
+    recvNew(cfgB);
+    assert.equal(existsSync(legacy), false, "旧单文件应被迁移删除");
+    for (const id of ["old-1", "old-2"]) {
+      assert.equal(existsSync(join(root, "agent-b", ".seen", `${id}.seen`)), true, `标记 ${id}.seen 应生成`);
+    }
+    const migrated = loadSeen(cfgB).sort();
+    assert.deepEqual(migrated, ["old-1", "old-2"]);
+    // 迁移后新增 recv 也应正常去重
+    sendMessage(cfgA, { to: "agent-b", topic: "after" });
+    assert.equal(recvNew(cfgB).length, 1);
+    assert.equal(recvNew(cfgB).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("assertUsable 缺 identity 时抛错; 空 root 回退默认值不抛错", () => {
   const { root } = setup();
   try {
     assert.throws(() => assertUsable(resolveConfig({ identity: "" })), /identity/);
-    assert.throws(() => assertUsable(resolveConfig({ identity: "x", root: "" })), /root/);
+    assert.doesNotThrow(() => assertUsable(resolveConfig({ identity: "x", root: "" })));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

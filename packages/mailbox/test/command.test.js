@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig, setAlias, touchRegistry, recvNew, sendMessage } from "../lib/core.js";
-import { parseMailboxCommand, executeMailboxCommand, MAILBOX_USAGE } from "../lib/command.js";
+import { parseMailboxCommand, executeMailboxCommand } from "../lib/command.js";
 
 const fakeSession = (id, cwd, title) => ({
   id,
@@ -67,7 +67,7 @@ test("/mailbox 缺消息 / 用法 / 目录 / recv", () => {
 
     const usage = executeMailboxCommand({}, cfg, fakeInvocation(sA, ""));
     assert.equal(usage.kind, "success");
-    assert.match(usage.text, new RegExp(MAILBOX_USAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(usage.text, /会话目录:/); // 裸 /mailbox 不再带 Usage 行, 只做目录发现
     assert.match(usage.text, /dsh-mailbox-aaaa0000/);
 
     const list = executeMailboxCommand({}, cfg, fakeInvocation(sA, "list"));

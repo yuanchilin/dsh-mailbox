@@ -15,7 +15,7 @@
 //  消息格式: { id, from, to, type, topic, payload, ts, reply_to }
 // ============================================================================
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync } from "node:fs";
 import { join, dirname, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -98,25 +98,74 @@ function resolveDirs(cfg) {
   return { out, in: inDirs };
 }
 
+const SEEN_EXT = ".seen";
+
 function seenFileOf(cfg) {
   if (cfg.seenFile) return cfg.seenFile;
   return join(resolveDirs(cfg).out, ".seen.json");
 }
 
-function loadSeen(cfg) {
-  const f = seenFileOf(cfg);
-  if (!existsSync(f)) return [];
+function seenDirOf(cfg) {
+  if (cfg.seenFile) return "";
+  return join(resolveDirs(cfg).out, ".seen");
+}
+function seenMarkName(id) { return `${id}${SEEN_EXT}`; }
+
+function migrateSeen(cfg, dir) {
+  const legacy = seenFileOf(cfg);
+  if (cfg.seenFile || !existsSync(legacy) || existsSync(dir)) return;
   try {
-    // pwsh 旧版本可能把单元素 seen 写成裸字符串 "id", 归一化为数组
-    const v = JSON.parse(readFileSync(f, "utf-8"));
-    return Array.isArray(v) ? v : [v];
-  } catch { return []; }
+    const v = JSON.parse(readFileSync(legacy, "utf-8"));
+    const arr = Array.isArray(v) ? v : [v];
+    mkdirSync(dir, { recursive: true });
+    for (const id of arr) if (id) writeFileSync(join(dir, seenMarkName(id)), "", "utf-8");
+    rmSync(legacy, { force: true });
+  } catch { /* 迁移失败则保留旧文件 */ }
+}
+
+function loadSeen(cfg) {
+  const dir = seenDirOf(cfg);
+  if (!dir) {
+    const f = seenFileOf(cfg);
+    if (!existsSync(f)) return [];
+    try {
+      const v = JSON.parse(readFileSync(f, "utf-8"));
+      return Array.isArray(v) ? v : [v];
+    } catch { return []; }
+  }
+  migrateSeen(cfg, dir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((x) => x.endsWith(SEEN_EXT)).map((x) => x.slice(0, -SEEN_EXT.length));
 }
 
 function saveSeen(cfg, seen) {
-  const f = seenFileOf(cfg);
-  mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify([...new Set(seen)]));
+  const dir = seenDirOf(cfg);
+  if (!dir) {
+    const f = seenFileOf(cfg);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, JSON.stringify([...new Set(seen)]));
+    return;
+  }
+  mkdirSync(dir, { recursive: true });
+  for (const id of new Set(seen)) if (id) markSeen(cfg, id);
+}
+
+// 目录化 seen: 每条已读消息一个 `.seen` 标记文件, 临时文件 + 原子 rename 写入 (并发安全)
+function markSeen(cfg, id) {
+  if (!id) return;
+  const dir = seenDirOf(cfg);
+  if (!dir) {
+    const cur = loadSeen(cfg);
+    if (!cur.includes(id)) saveSeen(cfg, [...cur, id]);
+    return;
+  }
+  migrateSeen(cfg, dir);
+  mkdirSync(dir, { recursive: true });
+  const mark = join(dir, seenMarkName(id));
+  if (existsSync(mark)) return;
+  const tmp = join(dir, `.tmp-${id}`);
+  writeFileSync(tmp, "", "utf-8");
+  renameSync(tmp, mark);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -177,7 +226,7 @@ function cmdRecv(cfg, args) {
   }
 }
 
-function recvNew(cfg, markSeen) {
+function recvNew(cfg, mark) {
   const seen = loadSeen(cfg);
   const dirs = resolveDirs(cfg);
   const fresh = [];
@@ -188,12 +237,11 @@ function recvNew(cfg, markSeen) {
         const m = JSON.parse(readFileSync(join(dir, f), "utf-8"));
         if ((m.to === cfg.identity || m.to === "all") && !seen.includes(m.id)) {
           fresh.push(m);
-          if (markSeen) seen.push(m.id);
+          if (mark) markSeen(cfg, m.id);
         }
       } catch { /* 跳过损坏消息 */ }
     }
   }
-  if (markSeen) saveSeen(cfg, seen);
   return fresh;
 }
 

@@ -7,10 +7,10 @@
 //    - layout=dirs: dirs: { "<id>": "<目录>" } 显式映射 (旧双目录兼容)
 //    - 消息: { id, from, to, type, topic, payload, ts, reply_to }, 文件 msg_<id>.json
 //    - 路由: to=<id> 定向 / to=all 广播 (写一份, 各人自取)
-//    - seen 去重: 每参与者独立 seen 文件 (默认 <outDir>/.seen.json)
+//    - seen 去重: 每参与者独立 seen 目录 (默认 <outDir>/.seen/, 每消息一个 .seen 标记, 原子写)
 // ============================================================================
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 
@@ -37,6 +37,11 @@ export const DEFAULTS = {
 /** 合并默认值(可选: 环境变量 > 显式覆盖)。插件侧直接传 Config 对象, CLI 侧先加载配置文件。 */
 export function resolveConfig(partial = {}, env = {}) {
   const cfg = { ...DEFAULTS, ...partial };
+  // schema 默认 "" 会覆盖 DEFAULTS 的回退值 (如 root=DSH_HOME/mailbox),
+  // 导致零配置下 root 为空 → 注册表无法写入 → 会话目录永远为空。
+  // 空 root / patchRoot 视为"未配置", 回退到 DEFAULTS。
+  if (!cfg.root) cfg.root = DEFAULTS.root;
+  if (!cfg.patchRoot) cfg.patchRoot = DEFAULTS.patchRoot;
   if (env.MAILBOX_ID) cfg.identity = env.MAILBOX_ID;
   if (env.MAILBOX_ROOT) { cfg.root = env.MAILBOX_ROOT; cfg.layout = "root"; }
   if (env.MAILBOX_INTERVAL) cfg.intervalSec = Number(env.MAILBOX_INTERVAL);
@@ -67,27 +72,105 @@ export function resolveDirs(cfg) {
   return { out, in: inDirs };
 }
 
+const SEEN_EXT = ".seen";
+
+/**
+ * seen 旧默认文件路径 (仅用于迁移检测; 显式 cfg.seenFile 时作为单文件存储路径)。
+ */
 export function seenFileOf(cfg) {
   if (cfg.seenFile) return cfg.seenFile;
   return join(resolveDirs(cfg).out, ".seen.json");
 }
 
-export function loadSeen(cfg) {
-  const f = seenFileOf(cfg);
-  if (!existsSync(f)) return [];
+/**
+ * 目录化 seen 的存储目录。显式配置 cfg.seenFile 时走旧"单 JSON 数组文件"
+ * 兼容路径, 返回 "" (此时用 seenFileOf)。
+ *
+ * 默认目录化: 每条已读消息一个 `.seen` 标记文件, 通过临时文件 + 原子 rename
+ * 写入 —— 多进程/多主机并发 recv 互不覆盖, 根治单文件"读改写"丢 seen 记录。
+ */
+function seenDirOf(cfg) {
+  if (cfg.seenFile) return "";
+  return join(resolveDirs(cfg).out, ".seen");
+}
+
+function seenMarkName(id) { return `${id}${SEEN_EXT}`; }
+
+/** 目录模式下, 把旧的单文件 .seen.json 迁移到 .seen/ 目录 (幂等; 显式 seenFile 时跳过)。 */
+function migrateSeen(cfg, dir) {
+  const legacy = seenFileOf(cfg);
+  if (cfg.seenFile || !existsSync(legacy) || existsSync(dir)) return;
   try {
-    // pwsh 旧版本可能把单元素 seen 写成裸字符串 "id", 归一化为数组
-    const v = JSON.parse(readFileSync(f, "utf-8"));
-    return Array.isArray(v) ? v : [v];
+    const v = JSON.parse(readFileSync(legacy, "utf-8"));
+    const arr = Array.isArray(v) ? v : [v];
+    mkdirSync(dir, { recursive: true });
+    for (const id of arr) {
+      if (id) writeFileSync(join(dir, seenMarkName(id)), "", "utf-8");
+    }
+    rmSync(legacy, { force: true });
   } catch {
-    return [];
+    // 迁移失败则保留旧文件; 目录不在时单文件 loadSeen/markSeen 仍兼容
   }
 }
 
+export function loadSeen(cfg) {
+  const dir = seenDirOf(cfg);
+  if (!dir) { // 单文件模式 (显式 seenFile)
+    const f = seenFileOf(cfg);
+    if (!existsSync(f)) return [];
+    try {
+      // pwsh 旧版本可能把单元素 seen 写成裸字符串 "id", 归一化为数组
+      const v = JSON.parse(readFileSync(f, "utf-8"));
+      return Array.isArray(v) ? v : [v];
+    } catch {
+      return [];
+    }
+  }
+  migrateSeen(cfg, dir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((x) => x.endsWith(SEEN_EXT))
+    .map((x) => x.slice(0, -SEEN_EXT.length));
+}
+
+/** 批量补写 (迁移/兼容调用; 目录模式逐条原子标记)。 */
 export function saveSeen(cfg, seen) {
-  const f = seenFileOf(cfg);
-  mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify([...new Set(seen)]));
+  const dir = seenDirOf(cfg);
+  if (!dir) { // 单文件模式
+    const f = seenFileOf(cfg);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, JSON.stringify([...new Set(seen)]));
+    return;
+  }
+  mkdirSync(dir, { recursive: true });
+  for (const id of new Set(seen)) {
+    if (id) markSeen(cfg, id);
+  }
+}
+
+/** 标记单条已读: 目录模式临时文件 + rename 原子写入, 并发安全; 单文件模式读改写尽力兼容。 */
+export function markSeen(cfg, id) {
+  if (!id) return;
+  const dir = seenDirOf(cfg);
+  if (!dir) { // 单文件: 读改写 (显式配置, 为一次并发安全做尽力而为)
+    const cur = loadSeen(cfg);
+    if (!cur.includes(id)) saveSeen(cfg, [...cur, id]);
+    return;
+  }
+  migrateSeen(cfg, dir);
+  mkdirSync(dir, { recursive: true });
+  const mark = join(dir, seenMarkName(id));
+  if (existsSync(mark)) return;
+  const tmp = join(dir, `.tmp-${id}`);
+  writeFileSync(tmp, "", "utf-8");
+  renameSync(tmp, mark); // 原子 rename: 目录模式下并发写互不覆盖
+}
+
+/** 单条已读判定: 目录模式 O(1) 存在性检查 (供 watcher/unread 高效判断)。 */
+export function isSeen(cfg, id) {
+  const dir = seenDirOf(cfg);
+  if (!dir) return loadSeen(cfg).includes(id);
+  return existsSync(join(dir, seenMarkName(id)));
 }
 
 function newId() {
@@ -110,8 +193,8 @@ export function sendMessage(cfg, { to, type = "notify", topic = "", payload = {}
   return id;
 }
 
-/** 接收: 扫描所有对方目录, 取 to=自己 或 to=all 且未 seen 的消息。markSeen 默认 true。 */
-export function recvNew(cfg, markSeen = true) {
+/** 接收: 扫描所有对方目录, 取 to=自己 或 to=all 且未 seen 的消息。mark 默认 true。 */
+export function recvNew(cfg, mark = true) {
   const seen = loadSeen(cfg);
   const dirs = resolveDirs(cfg);
   const fresh = [];
@@ -122,14 +205,13 @@ export function recvNew(cfg, markSeen = true) {
         const m = JSON.parse(readFileSync(join(dir, f), "utf-8"));
         if ((m.to === cfg.identity || m.to === "all") && !seen.includes(m.id)) {
           fresh.push(m);
-          if (markSeen) seen.push(m.id);
+          if (mark) markSeen(cfg, m.id);
         }
       } catch {
         // 跳过损坏消息
       }
     }
   }
-  if (markSeen) saveSeen(cfg, seen);
   return fresh;
 }
 

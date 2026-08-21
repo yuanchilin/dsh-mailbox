@@ -10,6 +10,7 @@ node_modules/
 
 # npm 缓存 (构建工具链)
 .npm-cache/
+.npm-cache-tmp/
 
 # logs
 *.log
@@ -30,9 +31,11 @@ coverage/
 .tools/
 
 # 生成物 (不跟踪): 历史 typert 生成 / tsc 发射 / trigger 赘余
-# 注: lib/client.js(+.map) 浏览器 bundle 提交入库 (git clone 后 link: 即用; CI 校验其与源码同步)
+# 注: lib/client.js 浏览器 bundle 提交入库 (git clone 后 link: 即用; CI 校验其与源码同步)
+#     lib/client.js.map 不跟踪 (tsdown sourcemap:true 每次构建都会再生成)
 packages/mailbox/lib/typert.*
 packages/mailbox/lib/_typert.*
+packages/mailbox/lib/*.map
 packages/mailbox/lib/types/*
 !packages/mailbox/lib/types/index.d.ts
 packages/mailbox/node_modules/

@@ -50,12 +50,13 @@ export function scanMailboxRoot(root, known, live) {
         // 自收消息 (from=自己): recv 只扫别人目录, 永远读不到 → 不唤醒 (否则每次重启重复响铃)
         if (m.from === identity) continue;
         // 收件人已处理 (seen 含该 id) 则不重复唤醒
-        const seenPath = join(root, identity, ".seen.json");
-        if (existsSync(seenPath)) {
+        // seen 目录化: <identity>/.seen/<id>.seen (原子写); 兼容旧单文件 .seen.json
+        if (existsSync(join(root, identity, ".seen", `${m.id}.seen`))) continue;
+        const legacySeen = join(root, identity, ".seen.json");
+        if (existsSync(legacySeen)) {
           try {
-            const v = JSON.parse(readFileSync(seenPath, "utf-8"));
-            const seen = Array.isArray(v) ? v : [v];
-            if (seen.includes(m.id)) continue;
+            const v = JSON.parse(readFileSync(legacySeen, "utf-8"));
+            if ((Array.isArray(v) ? v : [v]).includes(m.id)) continue;
           } catch {
             // seen 损坏则视为未处理, 照常唤醒
           }

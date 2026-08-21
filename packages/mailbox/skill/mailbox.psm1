@@ -6,7 +6,7 @@
 #    - layout=dirs (兼容旧双目录): 显式 dirs 映射 { id -> 目录 }
 #    - 消息格式: { id, from, to, type, topic, payload, ts, reply_to }
 #    - 路由: to=<id> 定向 / to=all 广播 (写一份, 各人自取)
-#    - seen 去重: 每参与者独立 seen 文件 (默认 <outDir>/.seen.json)
+#    - seen 去重: 每参与者独立 seen 目录 (默认 <outDir>/.seen/, 每消息一个 .seen 标记, 原子写)
 #
 #  用法:
 #    Import-Module <dir>/mailbox.psm1
@@ -32,7 +32,7 @@ function Get-MailboxConfig {
         participants = @()           # layout=root 可选的显式参与者列表 (默认自动扫描)
         intervalSec  = 2
         timeoutSec   = 0
-        seenFile     = ""            # 默认 <outDir>/.seen.json
+        seenFile     = ""            # 显式时用单文件兼容; 默认目录化 <outDir>/.seen/
         patchRoot    = ""            # 供示例补丁 handler 使用
     }
 
@@ -124,12 +124,38 @@ function Get-MailboxSeenFile {
     return Join-Path (Resolve-MailboxDirs $Cfg).Out ".seen.json"
 }
 
+# 目录化 seen 的存储目录; 显式 seenFile 时返回 "" (走单文件兼容)
+function Get-MailboxSeenDir {
+    param($Cfg)
+    if ($Cfg.seenFile -ne "") { return "" }
+    return Join-Path (Resolve-MailboxDirs $Cfg).Out ".seen"
+}
+
 function Get-MailboxSeen {
     param($Cfg)
-    $f = Get-MailboxSeenFile $Cfg
+    $dir = Get-MailboxSeenDir $Cfg
+    if ($dir -eq "") {
+        $f = Get-MailboxSeenFile $Cfg
+        $seen = @()
+        if (Test-Path -LiteralPath $f) {
+            try { $seen = @((Get-Content -LiteralPath $f -Raw | ConvertFrom-Json)) } catch { $seen = @() }
+        }
+        return ,$seen
+    }
+    # 目录模式: 先迁移旧单文件 .seen.json (幂等)
+    $legacy = Get-MailboxSeenFile $Cfg
+    if ((Test-Path -LiteralPath $legacy) -and -not (Test-Path -LiteralPath $dir)) {
+        try {
+            $old = @((Get-Content -LiteralPath $legacy -Raw | ConvertFrom-Json))
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            foreach ($id in $old) { if ($id) { Set-Content -LiteralPath (Join-Path $dir "$id.seen") -Value "" -Encoding UTF8 } }
+            Remove-Item -LiteralPath $legacy -Force -ErrorAction SilentlyContinue
+        } catch { }
+    }
     $seen = @()
-    if (Test-Path -LiteralPath $f) {
-        try { $seen = @((Get-Content -LiteralPath $f -Raw | ConvertFrom-Json)) } catch { $seen = @() }
+    if (Test-Path -LiteralPath $dir) {
+        $seen = @(Get-ChildItem -LiteralPath $dir -Filter "*.seen" -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.BaseName })
     }
     # 逗号运算符: 防止单元素数组在函数输出边界被解包成裸字符串 (PowerShell 经典坑)
     return ,$seen
@@ -137,12 +163,37 @@ function Get-MailboxSeen {
 
 function Save-MailboxSeen {
     param($Cfg, [string[]]$Seen)
-    $f = Get-MailboxSeenFile $Cfg
-    $dir = Split-Path $f -Parent
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    # 参数形式 (-InputObject) 保证单元素也输出数组 JSON ["a"], 避免管道解包成 "a"
-    $unique = @($Seen | Select-Object -Unique)
-    ConvertTo-Json -InputObject $unique | Set-Content -LiteralPath $f -Encoding UTF8
+    $dir = Get-MailboxSeenDir $Cfg
+    if ($dir -eq "") {
+        $f = Get-MailboxSeenFile $Cfg
+        $d = Split-Path $f -Parent
+        if ($d -and -not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+        # 参数形式 (-InputObject) 保证单元素也输出数组 JSON ["a"], 避免管道解包成 "a"
+        $unique = @($Seen | Select-Object -Unique)
+        ConvertTo-Json -InputObject $unique | Set-Content -LiteralPath $f -Encoding UTF8
+        return
+    }
+    # 目录模式: 逐条原子标记 (并发安全, 不互不覆盖)
+    foreach ($id in ($Seen | Select-Object -Unique)) { if ($id) { Add-MailboxSeenMark $Cfg $id } }
+}
+
+# 目录化 seen: 每条已读消息一个 `.seen` 标记文件, 临时文件 + Move 原子提交
+function Add-MailboxSeenMark {
+    param($Cfg, [string]$Id)
+    if (-not $Id) { return }
+    $dir = Get-MailboxSeenDir $Cfg
+    if ($dir -eq "") {
+        # 单文件兼容: 读改写
+        $seen = Get-MailboxSeen $Cfg
+        if ($seen -notcontains $Id) { Save-MailboxSeen $Cfg @($seen + $Id) }
+        return
+    }
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $mark = Join-Path $dir ("$Id.seen")
+    if (Test-Path -LiteralPath $mark) { return }
+    $tmp = Join-Path $dir (".tmp-$Id")
+    Set-Content -LiteralPath $tmp -Value "" -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination $mark -Force
 }
 
 # ---------------------------------------------------------------------------
@@ -198,12 +249,11 @@ function Recv-Mailbox {
                     $m = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
                     if (($m.to -eq $Cfg.identity -or $m.to -eq "all") -and ($seen -notcontains $m.id)) {
                         $new += $m
-                        if (-not $KeepSeen) { $seen += $m.id }
+                        if (-not $KeepSeen) { Add-MailboxSeenMark $Cfg $m.id }
                     }
                 } catch { }
             }
     }
-    if (-not $KeepSeen) { Save-MailboxSeen $Cfg $seen }
     return $new
 }
 
