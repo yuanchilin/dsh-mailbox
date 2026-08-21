@@ -261,19 +261,24 @@ export function sendAck(cfg, request, status, extra = {}) {
 }
 
 /** 查询 requestId 的最近回执: 扫描各对方目录中 reply_to===requestId 的消息。 */
+// 决胜规则 (确定性, 不依赖 readdir 顺序/平台): 先比 ts, 同 ms 再比状态语义
+// 优先级 error > done > processing > delivered —— 终态永远压过中间态。
+const ACK_WEIGHT = { error: 3, done: 2, processing: 1, delivered: 0 };
 export function latestReplyStatus(cfg, requestId, expectFrom = "") {
-  let best = null; // { ts, status, id, from }
+  let best = null; // { ts, status, id, from, payload }
   for (const dir of resolveDirs(cfg).in) {
     if (!existsSync(dir)) continue;
-    for (const f of readdirSync(dir)) {
-      if (!f.startsWith("msg_") || !f.endsWith(".json")) continue;
+    for (const f of readdirSync(dir).filter((x) => x.startsWith("msg_") && x.endsWith(".json")).sort()) {
       try {
         const m = JSON.parse(readFileSync(join(dir, f), "utf-8"));
         if (m.reply_to !== requestId) continue;
         if (expectFrom && m.from !== expectFrom) continue;
         if (m.payload?.status) {
-          if (!best || (m.ts ?? 0) >= best.ts) {
-            best = { ts: m.ts ?? 0, status: m.payload.status, id: m.id, from: m.from, payload: m.payload };
+          const ts = m.ts ?? 0;
+          const w = ACK_WEIGHT[m.payload.status] ?? 0;
+          const bw = best ? (ACK_WEIGHT[best.status] ?? 0) : -1;
+          if (!best || ts > best.ts || (ts === best.ts && w > bw)) {
+            best = { ts, status: m.payload.status, id: m.id, from: m.from, payload: m.payload };
           }
         }
       } catch {
