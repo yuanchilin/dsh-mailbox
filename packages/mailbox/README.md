@@ -19,6 +19,22 @@ DeepSeek Harness 跨会话文件信箱插件：让多个 DSH 会话 / agent 通�
 - **发现**：`mailbox_sessions` 会话目录（在线/别名/工作区/标题）；发送目标未登记时**错误即地址簿**（附完整目录）；`to` 支持 identity / 别名 / 完整 sessionId / 工作区路径 / `all`。
 - **默认信箱位置**：`$DSH_HOME/mailbox`（通常 `~/.dsh/mailbox`），无 DSH_HOME 回退 `~/.dsh/mailbox`——可移植，不写死盘符。
 
+### 回执 / 确认协议（request → delivered → done|error）
+
+`request` 型消息的接收方在收取时**自动回执 `delivered`**（收到确认，幂等防重），处理完再回 `done` / `error`——让"确认"成为协议一等公民，发送方不再是"发了就以为对方办了"：
+
+```
+发送方 A                信箱文件              接收方 B
+request ───────────────► 收到 ──► 自动回执 delivered ──► A 读到"已收到"
+                                                  B 干活/确认方案
+B 处理完回 done/error ◄─── reply (reply_to=原id) ◄───┘  A 读到"已完成/出错"
+```
+
+- 自动回执：`mailbox_recv` 工具、`/mailbox recv` 命令、CLI `recv/wait`、skill 双实现，收取 request 时自动回 `delivered`（CLI/pwsh 可 `--no-ack` / `-NoAck` 关闭）。
+- 完成回执：处理完用 `mailbox_send to=<发送方> type=reply replyTo=<消息id> payload={status:"done"|"error", detail?}`。
+- 查询：`latestReplyStatus(cfg, requestId)` 返回最近回执（含 error 的 detail），发送方据此判断生命周期。
+- 行为策略：涉及执行/计划类任务时，接收 agent 应先向发送方回复确认方案、**等待确认后再动手**（唤醒通知与 recv 输出均带有此提示）。
+
 ## 安装（DSH 插件）
 
 ```sh

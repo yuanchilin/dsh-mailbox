@@ -59,11 +59,18 @@ export function executeMailboxCommand(ctx, cfg, invocation) {
     case "recv": {
       const msgs = core.recvNew(eff, true);
       if (msgs.length === 0) return { kind: "success", text: "(无新消息)" };
+      let acked = 0;
+      for (const m of msgs) {
+        if (m.type === "request" && core.sendAck(eff, m, "delivered")) acked++;
+      }
       const lines = msgs.map((m) => {
         const p = m.payload && Object.keys(m.payload).length ? ` payload=${JSON.stringify(m.payload)}` : "";
         return `[${m.from} -> ${m.to}] ${m.type} topic=${m.topic} id=${m.id}${m.reply_to ? ` reply_to=${m.reply_to}` : ""}${p}`;
       });
-      return { kind: "success", text: `新消息 ${msgs.length} 条:\n${lines.join("\n")}` };
+      const hint = acked > 0
+        ? `\n已自动回执 delivered 给 ${acked} 条 request ✓ (处理完请用 mailbox_send type=reply replyTo=<消息id> 回 done/error)`
+        : "";
+      return { kind: "success", text: `新消息 ${msgs.length} 条:\n${lines.join("\n")}${hint}` };
     }
     case "no-message":
       return { kind: "error", text: `/mailbox ${parsed.to}: 缺少消息内容（用法：/mailbox <目标|别名|all> <消息>）` };

@@ -215,6 +215,75 @@ export function recvNew(cfg, mark = true) {
   return fresh;
 }
 
+// ---- 回执协议 (ack): 让"确认"成为协议一等公民 ----
+//
+// 生命周期: request 被消费时接收方自动回 delivered → 处理完回 done/error。
+// 回执即普通 reply 消息 (topic="status", payload.status, reply_to=原消息id),
+// 写接收方自己的目录, 发送方扫描对方目录即可读到 —— 不需要新通道。
+// 幂等: 同一 (requestId, status) 只回一次, 防重启/重复消费导致重复回执。
+
+export const ACK_TOPIC = "status";
+const ACK_STATUSES = ["delivered", "processing", "done", "error"];
+
+/** 本会话是否已对 requestId 发过指定 status 的回执 (扫自己发件目录, 幂等防重)。 */
+export function hasAck(cfg, requestId, status) {
+  if (!requestId || !status) return false;
+  const dirs = resolveDirs(cfg);
+  if (!existsSync(dirs.out)) return false;
+  for (const f of readdirSync(dirs.out)) {
+    if (!f.startsWith("msg_") || !f.endsWith(".json")) continue;
+    try {
+      const m = JSON.parse(readFileSync(join(dirs.out, f), "utf-8"));
+      if (m.reply_to === requestId && m.payload?.status === status) return true;
+    } catch {
+      // 跳过损坏消息
+    }
+  }
+  return false;
+}
+
+/**
+ * 回执: 向 request 消息的发送者回一条 reply (status: delivered|processing|done|error)。
+ * 返回 true=已写入回执, false=跳过 (参数缺失 / 发给自己 / 幂等已存在)。
+ */
+export function sendAck(cfg, request, status, extra = {}) {
+  if (!request || !request.id || !request.from || !ACK_STATUSES.includes(status)) return false;
+  if (request.from === cfg.identity) return false;
+  if (hasAck(cfg, request.id, status)) return false;
+  sendMessage(cfg, {
+    to: request.from,
+    type: "reply",
+    topic: ACK_TOPIC,
+    payload: { status, requestId: request.id, ...extra },
+    replyTo: request.id,
+  });
+  return true;
+}
+
+/** 查询 requestId 的最近回执: 扫描各对方目录中 reply_to===requestId 的消息。 */
+export function latestReplyStatus(cfg, requestId, expectFrom = "") {
+  let best = null; // { ts, status, id, from }
+  for (const dir of resolveDirs(cfg).in) {
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      if (!f.startsWith("msg_") || !f.endsWith(".json")) continue;
+      try {
+        const m = JSON.parse(readFileSync(join(dir, f), "utf-8"));
+        if (m.reply_to !== requestId) continue;
+        if (expectFrom && m.from !== expectFrom) continue;
+        if (m.payload?.status) {
+          if (!best || (m.ts ?? 0) >= best.ts) {
+            best = { ts: m.ts ?? 0, status: m.payload.status, id: m.id, from: m.from, payload: m.payload };
+          }
+        }
+      } catch {
+        // 跳过损坏消息
+      }
+    }
+  }
+  return best;
+}
+
 /** 按 id 删除消息: inbox=true 删对方目录(已处理), 否则删自己的目录(已发送)。 */
 export function removeMessage(cfg, id, inbox = false) {
   const dirs = resolveDirs(cfg);

@@ -9,7 +9,7 @@
 //  node bin/mailbox.mjs clean --ttl-hours 24 --dry-run
 //  node bin/mailbox.mjs status
 //  node bin/mailbox.mjs sessions                    # 会话目录 (注册表: 在线/别名/工作区)
-//  node bin/mailbox.mjs init --id agent-a --root D:/Downloads/Agent/.mailbox
+//  node bin/mailbox.mjs init --identity agent-a --root D:/Downloads/Agent/.mailbox
 //
 //  配置优先级: 参数 > 环境变量 (MAILBOX_CONFIG/ID/ROOT/INTERVAL/TIMEOUT) > 配置文件 > 默认
 // ============================================================================
@@ -50,6 +50,7 @@ function getConfig(args) {
   }
   const cfg = core.resolveConfig({ ...fileCfg }, process.env);
   if (args.identity) cfg.identity = args.identity;
+  if (args.id && !cfg.identity) cfg.identity = args.id; // --id 兼容别名 (注释与旧脚本常用)
   if (args.root) { cfg.root = args.root; cfg.layout = "root"; }
   if (args.interval !== undefined) cfg.intervalSec = Number(args.interval);
   if (args.timeout !== undefined) cfg.timeoutSec = Number(args.timeout);
@@ -111,6 +112,10 @@ const commands = {
     safeTouchCli(cfg);
     const msgs = core.recvNew(cfg, true);
     if (msgs.length === 0) { console.log("(无新消息)"); return; }
+    let acked = 0;
+    if (!args["no-ack"]) {
+      for (const m of msgs) if (m.type === "request" && core.sendAck(cfg, m, "delivered")) acked++;
+    }
     if (args.format === "json") {
       for (const m of msgs) console.log(JSON.stringify(m));
     } else {
@@ -119,6 +124,7 @@ const commands = {
         console.log(`[${m.from} -> ${m.to}] ${m.type} topic=${m.topic} id=${m.id}${m.reply_to ? ` reply_to=${m.reply_to}` : ""}${p}`);
       }
     }
+    if (acked > 0) console.log(`[mailbox] 已自动回执 delivered 给 ${acked} 条 request ✓ (--no-ack 可关闭)`);
   },
 
   async wait(args, cfg) {
@@ -128,8 +134,13 @@ const commands = {
     for (;;) {
       const msgs = core.recvNew(cfg, true);
       if (msgs.length > 0) {
+        let acked = 0;
+        if (!args["no-ack"]) {
+          for (const m of msgs) if (m.type === "request" && core.sendAck(cfg, m, "delivered")) acked++;
+        }
         console.log(`=== NEW MESSAGES: ${msgs.length} ===`);
         for (const m of msgs) console.log(JSON.stringify(m));
+        if (acked > 0) console.log(`[mailbox] 已自动回执 delivered 给 ${acked} 条 request ✓ (--no-ack 可关闭)`);
         console.log("=== WAKE-UP (exit 0) ===");
         process.exit(0);
       }

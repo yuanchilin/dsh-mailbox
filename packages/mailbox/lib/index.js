@@ -72,7 +72,7 @@ function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: "mailbox_send",
-    description: "通过共享文件系统信箱向其他会话/agent 发送一条异步消息。to=参与者 identity / 别名 / 完整 sessionId 定向发送，或 all 广播；消息类型 request/response/notify/reply；对方不在线也不丢消息（对方之后 recv 或 CLI wait/poll 即可收到）。可用 mailbox_sessions 查看有哪些会话及其身份/别名。",
+    description: "通过共享文件系统信箱向其他会话/agent 发送一条异步消息。to=参与者 identity / 别名 / 完整 sessionId 定向发送，或 all 广播；消息类型 request/response/notify/reply；对方不在线也不丢消息（对方之后 recv 或 CLI wait/poll 即可收到）。request 型消息对方收取时会自动回执 delivered，处理完会回 done/error（本端下次 mailbox_recv 可读到该 reply）；需要对方确认后再执行的任务请用 request 型。可用 mailbox_sessions 查看有哪些会话及其身份/别名。",
     parameters: {
       to: { type: "string", required: true, description: "接收方：identity（如 dsh-mailbox-17cbcfa0）/ 别名（如 rp）/ 完整 sessionId / all 广播" },
       type: { type: "string", enum: ["request", "response", "notify", "reply"], description: "消息类型，默认 notify" },
@@ -132,7 +132,7 @@ function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: "mailbox_recv",
-    description: "读取信箱中发给本会话的新消息（自动记录 seen，重复调用不会重复返回）。返回消息列表：from/to/type/topic/payload/reply_to。无新消息时返回空列表。长驻等待请用 CLI：npx mailbox wait。",
+    description: "读取信箱中发给本会话的新消息（自动记录 seen，重复调用不会重复返回）。request 型消息会向发送方自动回执 delivered（收到确认），收到此类消息请先确认意图，涉及执行/计划类任务先回复确认方案并等待发送方确认后再动手，处理完成后回执 done/error（mailbox_send to=发送方 type=reply replyTo=消息id payload={status:\"done\"}）。返回消息列表：from/to/type/topic/payload/reply_to。无新消息时返回空列表。长驻等待请用 CLI：npx mailbox wait。",
     parameters: {
       format: { type: "string", enum: ["table", "json"], description: "输出格式，默认 table" },
     },
@@ -160,6 +160,7 @@ function apply(ctx, config) {
               },
             },
           },
+          ackHint: { type: "string" },
         },
       },
       render: (_args, value) => {
@@ -168,12 +169,23 @@ function apply(ctx, config) {
           const p = m.payload && Object.keys(m.payload).length ? ` payload=${JSON.stringify(m.payload)}` : "";
           return `[${m.from} -> ${m.to}] ${m.type} topic=${m.topic} id=${m.id}${m.reply_to ? ` reply_to=${m.reply_to}` : ""}${p}`;
         });
-        return text(`新消息 ${value.count} 条:\n${lines.join("\n")}`);
+        const hint = value.ackHint ? `\n${value.ackHint}` : "";
+        return text(`新消息 ${value.count} 条:\n${lines.join("\n")}${hint}`);
       },
     },
     execute: async (args, exec) => withSession(cfg, exec, (eff) => {
       const messages = core.recvNew(eff, true);
-      return { count: messages.length, messages };
+      let acked = 0;
+      for (const m of messages) {
+        if (m.type === "request" && core.sendAck(eff, m, "delivered")) acked++;
+      }
+      return {
+        count: messages.length,
+        messages,
+        ackHint: acked > 0
+          ? `已自动回执 delivered 给 ${acked} 条 request 的发送方 ✓\n处理完成后请回报: mailbox_send to=<发送方> type=reply replyTo=<消息id> payload={status:"done"|"error"}`
+          : "",
+      };
     }),
     presentCall: () => ({ card: "generic", title: "mailbox recv", kind: "other" }),
   }));

@@ -91,6 +91,36 @@ test("/mailbox 缺消息 / 用法 / 目录 / recv", () => {
   }
 });
 
+test("/mailbox recv: request 型消息自动回执 delivered", () => {
+  const { root, cfg } = setup();
+  try {
+    const sA = fakeSession("session-aaaa0000-1111", "D:/ws/dsh-mailbox", "联调");
+    const sB = fakeSession("session-bbbb0000-2222", "D:/ws/mcp-serial", "");
+    touchRegistry(cfg, sA);
+    touchRegistry(cfg, sB);
+    // B 发 request 给 A
+    const rid = sendMessage(resolveConfig({ root, identity: "mcp-serial-bbbb0000" }), {
+      to: "dsh-mailbox-aaaa0000", type: "request", topic: "干活", payload: { plan: "先确认再执行" },
+    });
+    const recv = executeMailboxCommand({}, cfg, fakeInvocation(sA, "recv"));
+    assert.equal(recv.kind, "success");
+    assert.match(recv.text, /request/);
+    assert.match(recv.text, /已自动回执 delivered/);
+    // B 端能读到 A 的回执
+    const cfgB = resolveConfig({ root, identity: "mcp-serial-bbbb0000" });
+    const replies = recvNew(cfgB);
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].type, "reply");
+    assert.equal(replies[0].reply_to, rid);
+    assert.equal(replies[0].payload.status, "delivered");
+    // 第二次 recv 不重复回执 (消息已 seen, 且同状态幂等)
+    const recv2 = executeMailboxCommand({}, cfg, fakeInvocation(sA, "recv"));
+    assert.match(recv2.text, /无新消息/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("/mailbox all 广播", () => {
   const { root, cfg } = setup();
   try {

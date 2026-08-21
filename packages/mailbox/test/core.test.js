@@ -14,6 +14,9 @@ import {
   assertUsable,
   loadSeen,
   markSeen,
+  sendAck,
+  hasAck,
+  latestReplyStatus,
 } from "../lib/core.js";
 
 function setup() {
@@ -150,6 +153,41 @@ test("seen 迁移: 旧 .seen.json 自动迁移到目录化并删除旧文件", (
     sendMessage(cfgA, { to: "agent-b", topic: "after" });
     assert.equal(recvNew(cfgB).length, 1);
     assert.equal(recvNew(cfgB).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("回执协议: request → delivered → done, 发送方可查生命周期 (幂等防重)", () => {
+  const { root, cfgA, cfgB } = setup();
+  try {
+    // A 发 request 给 B
+    const rid = sendMessage(cfgA, { to: "agent-b", type: "request", topic: "对齐", payload: { job: "x" } });
+    // B recv 消费 → 回执 delivered (消费层自动调用, 此处直接测 sendAck 语义)
+    const msgs = recvNew(cfgB);
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0].type, "request");
+    assert.equal(sendAck(cfgB, msgs[0], "delivered"), true, "首次回执应写入");
+    assert.equal(sendAck(cfgB, msgs[0], "delivered"), false, "同状态幂等: 不重复回执");
+    // A 查生命周期: delivered
+    let st = latestReplyStatus(cfgA, rid, "agent-b");
+    assert.ok(st, "A 应能读到回执");
+    assert.equal(st.status, "delivered");
+    assert.equal(st.from, "agent-b");
+    assert.equal(st.payload.requestId, rid);
+    // B 处理完回 done (带详情)
+    assert.equal(sendAck(cfgB, msgs[0], "done", { detail: "已对齐" }), true);
+    st = latestReplyStatus(cfgA, rid);
+    assert.equal(st.status, "done");
+    assert.equal(st.payload.detail, "已对齐");
+    // 回执不写给自己
+    assert.equal(sendAck(cfgA, msgs[0], "done"), false, "from===自己 不回执");
+    // hasAck
+    assert.equal(hasAck(cfgB, rid, "delivered"), true);
+    assert.equal(hasAck(cfgB, rid, "done"), true);
+    assert.equal(hasAck(cfgB, rid, "error"), false);
+    // 未知 requestId 查不到
+    assert.equal(latestReplyStatus(cfgA, rid + "-nope"), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

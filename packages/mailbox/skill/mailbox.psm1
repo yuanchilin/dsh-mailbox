@@ -197,6 +197,30 @@ function Add-MailboxSeenMark {
 }
 
 # ---------------------------------------------------------------------------
+# 回执协议 (ack): request 被消费自动回 delivered; 处理完回 done/error (幂等防重)
+# ---------------------------------------------------------------------------
+function Add-MailboxAck {
+    param($Cfg, $Request, [string]$Status, $Extra = @{})
+    if (-not $Request -or -not $Request.id -or -not $Request.from) { return $false }
+    if ($Request.from -eq $Cfg.identity) { return $false }
+    if ($Status -notin @("delivered", "processing", "done", "error")) { return $false }
+    # 幂等: 自己发件目录已有同 requestId+status 的回执则跳过
+    $dirs = Resolve-MailboxDirs $Cfg
+    if (Test-Path -LiteralPath $dirs.Out) {
+        $existing = Get-ChildItem -LiteralPath $dirs.Out -Filter "msg_*.json" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                try { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json } catch { $null }
+            } |
+            Where-Object { $_ -and $_.reply_to -eq $Request.id -and $_.payload.status -eq $Status }
+        if ($existing) { return $false }
+    }
+    $payload = @{ status = $Status; requestId = $Request.id }
+    foreach ($k in $Extra.Keys) { $payload[$k] = $Extra[$k] }
+    $id = Send-Mailbox -To $Request.from -Type reply -Topic "status" -Payload $payload -ReplyTo $Request.id -Cfg $Cfg
+    return ($id -ne $null -and $id -ne "")
+}
+
+# ---------------------------------------------------------------------------
 # 发送: 写到自己的目录 (对方读你的目录)
 # ---------------------------------------------------------------------------
 function Send-Mailbox {
@@ -234,7 +258,8 @@ function Send-Mailbox {
 function Recv-Mailbox {
     param(
         $Cfg,
-        [switch]$KeepSeen   # 置位时只读不更新 seen (wait 场景由调用方决定)
+        [switch]$KeepSeen,   # 置位时只读不更新 seen (wait 场景由调用方决定)
+        [switch]$NoAck       # 置位时不自动回执 delivered (纯只读监控)
     )
 
     # Get-MailboxSeen 已用逗号保证返回扁平数组, 这里不要再 @() 包装 (会变成嵌套数组)
@@ -253,6 +278,10 @@ function Recv-Mailbox {
                     }
                 } catch { }
             }
+    }
+    # 回执协议: request 型消息自动回 delivered (幂等防重)
+    if (-not $KeepSeen -and -not $NoAck) {
+        foreach ($m in $new) { if ($m.type -eq "request") { Add-MailboxAck $Cfg $m "delivered" | Out-Null } }
     }
     return $new
 }

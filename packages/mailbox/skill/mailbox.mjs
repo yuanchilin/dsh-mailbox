@@ -214,6 +214,10 @@ function cmdSend(cfg, args) {
 function cmdRecv(cfg, args) {
   const msgs = recvNew(cfg, true);
   if (msgs.length === 0) { console.log("(无新消息)"); return; }
+  let acked = 0;
+  if (!args["no-ack"]) {
+    for (const m of msgs) if (m.type === "request" && sendAck(cfg, m, "delivered")) acked++;
+  }
   if (args.format === "json") {
     for (const m of msgs) console.log(JSON.stringify(m));
   } else {
@@ -224,6 +228,7 @@ function cmdRecv(cfg, args) {
       if (p) console.log(`   payload: ${p}`);
     }
   }
+  if (acked > 0) console.log(`[mailbox] 已自动回执 delivered 给 ${acked} 条 request ✓ (--no-ack 可关闭)`);
 }
 
 function recvNew(cfg, mark) {
@@ -245,14 +250,53 @@ function recvNew(cfg, mark) {
   return fresh;
 }
 
+// ---- 回执协议 (ack): request 被消费自动回 delivered; 处理完回 done/error ----
+function hasAck(cfg, requestId, status) {
+  const dirs = resolveDirs(cfg);
+  if (!existsSync(dirs.out)) return false;
+  for (const f of readdirSync(dirs.out)) {
+    if (!f.startsWith("msg_") || !f.endsWith(".json")) continue;
+    try {
+      const m = JSON.parse(readFileSync(join(dirs.out, f), "utf-8"));
+      if (m.reply_to === requestId && m.payload?.status === status) return true;
+    } catch { /* 跳过损坏消息 */ }
+  }
+  return false;
+}
+
+function sendAck(cfg, request, status, extra = {}) {
+  if (!request || !request.id || !request.from) return false;
+  if (request.from === cfg.identity) return false;
+  if (!["delivered", "processing", "done", "error"].includes(status)) return false;
+  if (hasAck(cfg, request.id, status)) return false;
+  const dirs = resolveDirs(cfg);
+  mkdirSync(dirs.out, { recursive: true });
+  const id = `${ts()}${rand4()}-${rand4()}`;
+  const msg = {
+    id, from: cfg.identity, to: request.from,
+    type: "reply",
+    topic: "status",
+    payload: { status, requestId: request.id, ...extra },
+    ts: Date.now(),
+    reply_to: request.id,
+  };
+  writeFileSync(join(dirs.out, `msg_${id}.json`), JSON.stringify(msg) + "\n", "utf-8");
+  return true;
+}
+
 async function cmdWait(cfg, args) {
   const timeoutSec = cfg.timeoutSec;
   const started = Date.now();
   for (;;) {
     const msgs = recvNew(cfg, true);
     if (msgs.length > 0) {
+      let acked = 0;
+      if (!args["no-ack"]) {
+        for (const m of msgs) if (m.type === "request" && sendAck(cfg, m, "delivered")) acked++;
+      }
       console.log(`=== NEW MESSAGES: ${msgs.length} ===`);
       for (const m of msgs) console.log(JSON.stringify(m));
+      if (acked > 0) console.log(`[mailbox] 已自动回执 delivered 给 ${acked} 条 request ✓ (--no-ack 可关闭)`);
       console.log("=== WAKE-UP (exit 0) ===");
       process.exit(0);
     }

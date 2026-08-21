@@ -67,6 +67,13 @@ export function loadSeen(cfg: MailboxConfig): string[];
 export function saveSeen(cfg: MailboxConfig, seen: string[]): void;
 export function markSeen(cfg: MailboxConfig, id: string): void;
 export function isSeen(cfg: MailboxConfig, id: string): boolean;
+
+// ---- 回执协议 (ack) ----
+export const ACK_TOPIC: "status";
+export function hasAck(cfg: MailboxConfig, requestId: string, status: string): boolean;
+export function sendAck(cfg: MailboxConfig, request: MailboxMessage, status: string, extra?: Record<string, unknown>): boolean;
+export interface MailboxReplyStatus { ts: number; status: string; id: string; from: string; payload?: Record<string, unknown>; }
+export function latestReplyStatus(cfg: MailboxConfig, requestId: string, expectFrom?: string): MailboxReplyStatus | null;
 export function sendMessage(cfg: MailboxConfig, msg: Partial<Pick<MailboxMessage, "to" | "type" | "topic" | "payload" | "reply_to">>): string;
 export function recvNew(cfg: MailboxConfig, mark?: boolean): MailboxMessage[];
 export function removeMessage(cfg: MailboxConfig, id: string, inbox?: boolean): boolean;

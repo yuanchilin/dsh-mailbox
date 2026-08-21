@@ -99,6 +99,12 @@ export function startMailboxWatcher(ctx, cfg) {
         const agent = live.get(identity);
         for (const m of messages) {
           try {
+            // request 型消息: 唤醒提示里写明"先确认再执行"政策 (② 行为策略),
+            // 与 mailbox_recv 工具输出里的回执指引一致。
+            const isRequest = m.type === "request";
+            const policy = isRequest
+              ? `这是 request 型消息: 请 mailbox_recv 读取 (已回执 delivered)。涉及执行/计划类任务, 先向 ${m.from} 回复确认方案并等待对方确认后再动手; 完成后回执 done/error。`
+              : `收到新消息, 调用 mailbox_recv 读取处理。`;
             jobs.start({
               kind: "mailbox",
               label: `mailbox 新消息: [${m.from} -> ${m.to}] ${m.topic || "(无主题)"}`,
@@ -108,7 +114,7 @@ export function startMailboxWatcher(ctx, cfg) {
                 done: Promise.resolve({
                   status: "completed",
                   detail: `[${m.from} -> ${m.to}] ${m.topic || ""}`,
-                  output: `收到新消息 id=${m.id} from=${m.from} topic=${m.topic || ""}\n调用 mailbox_recv 读取处理。`,
+                  output: `收到 ${isRequest ? "request" : "新"}消息 id=${m.id} from=${m.from} topic=${m.topic || ""}\n${policy}`,
                 }),
               }),
             });
