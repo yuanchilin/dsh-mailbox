@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../lib/core.js";
@@ -86,6 +86,37 @@ test("scanMailboxRoot: 自收消息不唤醒 (recv 读不到, 避免重启重复
     writeMsg(root, "dsh-mailbox-aaaa0000", { id: "self1", from: "dsh-mailbox-aaaa0000", to: "dsh-mailbox-aaaa0000", topic: "self" });
     const live = new Map([["dsh-mailbox-aaaa0000", fakeAgent("session-aaaa0000-1111", "D:/ws/dsh-mailbox")]]);
     assert.equal(scanMailboxRoot(root, new Set(), live).size, 0, "from=自己 → 不唤醒");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("startMailboxWatcher: 识别新消息即代接收方回 delivered (不依赖对方 recv)", () => {
+  const root = setup();
+  try {
+    const agentA = fakeAgent("session-aaaa0000-1111", "D:/ws/dsh-mailbox");
+    writeMsg(root, "rp-bbbb0000", { id: "m1", from: "rp-bbbb0000", to: "dsh-mailbox-aaaa0000", topic: "hello" });
+    const ctx = {
+      get: (key) => (key === "jobs"
+        ? { start: () => "mailbox-1" }
+        : key === "agents" ? { list: () => [agentA] } : undefined),
+      effect: () => () => {},
+    };
+    const stop = startMailboxWatcher(ctx, resolveConfig({ root }));
+    try {
+      const outDir = join(root, "dsh-mailbox-aaaa0000");
+      assert.ok(existsSync(outDir), "接收方目录应被创建 (写入回执)");
+      const files = readdirSync(outDir).filter((f) => f.startsWith("msg_"));
+      assert.equal(files.length, 1, "只回执一次 (known+hasAck 双重去重)");
+      const reply = JSON.parse(readFileSync(join(outDir, files[0]), "utf-8"));
+      assert.equal(reply.type, "reply");
+      assert.equal(reply.from, "dsh-mailbox-aaaa0000");
+      assert.equal(reply.to, "rp-bbbb0000");
+      assert.equal(reply.reply_to, "m1");
+      assert.equal(reply.payload.status, "delivered");
+    } finally {
+      stop();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

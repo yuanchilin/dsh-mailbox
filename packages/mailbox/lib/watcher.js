@@ -97,6 +97,18 @@ export function startMailboxWatcher(ctx, cfg) {
       const fresh = scanMailboxRoot(cfg.root, known, live);
       for (const [identity, messages] of fresh) {
         const agent = live.get(identity);
+        // 投递回执 (watcher 层): 系统识别到"发往在线会话的新消息"即视为已投递,
+        // 代接收方立刻回 delivered —— 不依赖对方 agent 是否来 recv/是否回应。
+        // delivered 语义 = "系统已转交到对方会话"; 对方读没读/办没办由后续
+        // done/error 或人工跟进确认。幂等: sendAck 内部 hasAck 防重复回执。
+        const recvCfg = { ...cfg, identity };
+        for (const m of messages) {
+          try {
+            core.sendAck(recvCfg, m, "delivered");
+          } catch {
+            // 回执失败不影响唤醒
+          }
+        }
         for (const m of messages) {
           try {
             // request 型消息: 唤醒提示里写明"先确认再执行"政策 (② 行为策略),
